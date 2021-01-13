@@ -165,7 +165,7 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
     undistortedPoints();
     prev_time = cur_time;
 }
-
+// 使用F阵来进行重投影
 void FeatureTracker::rejectWithF()
 {
     if (forw_pts.size() >= 8)

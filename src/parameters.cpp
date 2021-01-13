@@ -67,6 +67,7 @@ void readParameters(string config_file)
 
     fsSettings["imu_topic"] >> IMU_TOPIC;
 
+    // 定义了焦距
     FOCAL_LENGTH = 460;
     SOLVER_TIME = fsSettings["max_solver_time"];
     NUM_ITERATIONS = fsSettings["max_num_iterations"];

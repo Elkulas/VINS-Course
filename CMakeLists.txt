@@ -15,6 +15,8 @@ find_package(Boost REQUIRED COMPONENTS filesystem program_options system)
 
 
 message(WARNING "OpenCV_VERSION: ${OpenCV_VERSION}")
+message(WARNING "OpenCV_INCLUDE: ${OpenCV_INCLUDE_DIRS}")
+message(WARNING "Pangolin_INCLUDE: ${Pangolin_INCLUDE_DIRS}")
 
 include_directories(
   ${PROJECT_SOURCE_DIR}/include

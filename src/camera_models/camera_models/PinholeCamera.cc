@@ -144,6 +144,8 @@ PinholeCamera::Parameters::cy(void) const
 bool
 PinholeCamera::Parameters::readFromYamlFile(const std::string& filename)
 {
+    // 读取数据
+    // 可以学习借鉴
     cv::FileStorage fs(filename, cv::FileStorage::READ);
 
     if (!fs.isOpened())

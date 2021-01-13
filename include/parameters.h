@@ -62,7 +62,7 @@ extern int ROLLING_SHUTTER;
 extern double ROW, COL;
 
 // void readParameters(ros::NodeHandle &n);
-
+// 读取所有的参数
 void readParameters(std::string config_file);
 
 enum SIZE_PARAMETERIZATION

@@ -95,7 +95,7 @@ CameraFactory::generateCameraFromYamlFile(const std::string& filename)
     {
         return CameraPtr();
     }
-
+    // 设置cameramodel
     Camera::ModelType modelType = Camera::MEI;
     if (!fs["model_type"].isNone())
     {
@@ -136,6 +136,7 @@ CameraFactory::generateCameraFromYamlFile(const std::string& filename)
         camera->setParameters(params);
         return camera;
     }
+    // 针孔模型
     case Camera::PINHOLE:
     {
         PinholeCameraPtr camera(new PinholeCamera);

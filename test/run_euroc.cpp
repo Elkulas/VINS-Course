@@ -22,9 +22,10 @@ string sData_path = "/home/dataset/EuRoC/MH-05/mav0/";
 string sConfig_path = "../config/";
 
 std::shared_ptr<System> pSystem;
-
+// 读取imu数据
 void PubImuData()
 {
+	// 定位文件位置
 	string sImu_data_file = sConfig_path + "MH_05_imu0.txt";
 	cout << "1 PubImuData start sImu_data_filea: " << sImu_data_file << endl;
 	ifstream fsImu;
@@ -158,13 +159,16 @@ int main(int argc, char **argv)
 	sData_path = argv[1];
 	sConfig_path = argv[2];
 
+	// 指向system的指针,重构为以config文件进行构造的system的路径
 	pSystem.reset(new System(sConfig_path));
-	
+
+	// 新建一个线程处理后端问题
 	std::thread thd_BackEnd(&System::ProcessBackEnd, pSystem);
 		
 	// sleep(5);
+	// 读取imu数据
 	std::thread thd_PubImuData(PubImuData);
-
+	// 读取image数据
 	std::thread thd_PubImageData(PubImageData);
 
 #ifdef __linux__	

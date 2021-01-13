@@ -25,6 +25,7 @@ struct IMU_MSG
     Eigen::Vector3d linear_acceleration;
     Eigen::Vector3d angular_velocity;
 };
+// 指向imu数据的指针
 typedef std::shared_ptr<IMU_MSG const> ImuConstPtr;
 
 //image for vio    
@@ -37,27 +38,32 @@ struct IMG_MSG {
     vector<float> velocity_x_of_point;
     vector<float> velocity_y_of_point;
 };
+// 指向图像数据的指针
 typedef std::shared_ptr <IMG_MSG const > ImgConstPtr;
     
 class System
 {
 public:
+    // 使用config文件进行构造
     System(std::string sConfig_files);
 
     ~System();
 
+    // 图像数据发布
     void PubImageData(double dStampSec, cv::Mat &img);
 
+    // imu数据发布
     void PubImuData(double dStampSec, const Eigen::Vector3d &vGyr, 
         const Eigen::Vector3d &vAcc);
 
     // thread: visual-inertial odometry
+    // 后端优化
     void ProcessBackEnd();
     void Draw();
     
     pangolin::OpenGlRenderState s_cam;
     pangolin::View d_cam;
-
+    // 特征点类
     FeatureTracker trackerData[NUM_OF_CAM];
 
 #ifdef __APPLE__
@@ -104,6 +110,8 @@ private:
     Eigen::Vector3d tmp_Bg;
     Eigen::Vector3d acc_0;
     Eigen::Vector3d gyr_0;
+    // 检测是不是第一个帧
+    // 第一帧需要进行跳过
     bool init_feature = 0;
     bool init_imu = 1;
     double last_imu_t = 0;

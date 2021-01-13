@@ -12,11 +12,15 @@ System::System(string sConfig_file_)
     string sConfig_file = sConfig_file_ + "euroc_config.yaml";
 
     cout << "1 System() sConfig_file: " << sConfig_file << endl;
+    // 将所有macro的参数进行阅读与读取
     readParameters(sConfig_file);
 
+    // 读取初始图像的数据
     trackerData[0].readIntrinsicParameter(sConfig_file);
 
+    // 估计模块初始化
     estimator.setParameter();
+    // 打开存储路径
     ofs_pose.open("./pose_output.txt",fstream::out);
     if(!ofs_pose.is_open())
     {
@@ -49,13 +53,14 @@ System::~System()
 
 void System::PubImageData(double dStampSec, Mat &img)
 {
+    // 第一帧需要进行跳过
     if (!init_feature)
     {
         cout << "1 PubImageData skip the first detected feature, which doesn't contain optical flow speed" << endl;
         init_feature = 1;
         return;
     }
-
+    // 判断是否为第一帧
     if (first_image_flag)
     {
         cout << "2 PubImageData first_image_flag" << endl;
@@ -65,6 +70,7 @@ void System::PubImageData(double dStampSec, Mat &img)
         return;
     }
     // detect unstable camera stream
+    // 检测时间流是否正确,有问题就restart
     if (dStampSec - last_image_time > 1.0 || dStampSec < last_image_time)
     {
         cerr << "3 PubImageData image discontinue! reset the feature tracker!" << endl;
@@ -73,8 +79,11 @@ void System::PubImageData(double dStampSec, Mat &img)
         pub_count = 1;
         return;
     }
+    // 到这里的时候已经就是第二帧图像了
     last_image_time = dStampSec;
     // frequency control
+    // freq从yaml中设置
+    // pubcount也就是记录了有多少帧
     if (round(1.0 * pub_count / (dStampSec - first_image_time)) <= FREQ)
     {
         PUB_THIS_FRAME = true;
@@ -89,11 +98,13 @@ void System::PubImageData(double dStampSec, Mat &img)
     {
         PUB_THIS_FRAME = false;
     }
-
+    // 计算时间
     TicToc t_r;
     // cout << "3 PubImageData t : " << dStampSec << endl;
+    // 读取第一个相机的情况
     trackerData[0].readImage(img, dStampSec);
 
+    // 更新全局id
     for (unsigned int i = 0;; i++)
     {
         bool completed = false;
@@ -102,6 +113,10 @@ void System::PubImageData(double dStampSec, Mat &img)
         if (!completed)
             break;
     }
+    // 如果发布
+    // 特征点id，矫正后归一化平面的3D点(x,y,z=1)，
+    // 像素2D点(u,v)，像素的速度(vx,vy)，
+    // 封装成shared_ptr<IMG_MSG>类型的feature_points实例中,发布到feature_buf;
     if (PUB_THIS_FRAME)
     {
         pub_count++;
@@ -152,7 +167,7 @@ void System::PubImageData(double dStampSec, Mat &img)
 
 #ifdef __linux__
     cv::Mat show_img;
-	cv::cvtColor(img, show_img, CV_GRAY2RGB);
+	cv::cvtColor(img, show_img, COLOR_GRAY2RGB);
 	if (SHOW_TRACK)
 	{
 		for (unsigned int j = 0; j < trackerData[0].cur_pts.size(); j++)
@@ -161,7 +176,7 @@ void System::PubImageData(double dStampSec, Mat &img)
 			cv::circle(show_img, trackerData[0].cur_pts[j], 2, cv::Scalar(255 * (1 - len), 0, 255 * len), 2);
 		}
 
-        cv::namedWindow("IMAGE", CV_WINDOW_AUTOSIZE);
+        cv::namedWindow("IMAGE", WINDOW_AUTOSIZE);
 		cv::imshow("IMAGE", show_img);
         cv::waitKey(1);
 	}
@@ -178,7 +193,7 @@ vector<pair<vector<ImuConstPtr>, ImgConstPtr>> System::getMeasurements()
     {
         if (imu_buf.empty() || feature_buf.empty())
         {
-            // cerr << "1 imu_buf.empty() || feature_buf.empty()" << endl;
+            cerr << "1 imu_buf.empty() || feature_buf.empty()" << endl;
             return measurements;
         }
 
@@ -227,16 +242,19 @@ void System::PubImuData(double dStampSec, const Eigen::Vector3d &vGyr,
 	imu_msg->linear_acceleration = vAcc;
 	imu_msg->angular_velocity = vGyr;
 
+    // 判断时间流
     if (dStampSec <= last_imu_t)
     {
         cerr << "imu message in disorder!" << endl;
         return;
     }
+    // 当前时间设置为last时间
     last_imu_t = dStampSec;
     // cout << "1 PubImuData t: " << fixed << imu_msg->header
     //     << " acc: " << imu_msg->linear_acceleration.transpose()
     //     << " gyr: " << imu_msg->angular_velocity.transpose() << endl;
     m_buf.lock();
+    // 数据存入imu的buffer中
     imu_buf.push(imu_msg);
     // cout << "1 PubImuData t: " << fixed << imu_msg->header 
     //     << " imu_buf size:" << imu_buf.size() << endl;
@@ -245,6 +263,7 @@ void System::PubImuData(double dStampSec, const Eigen::Vector3d &vGyr,
 }
 
 // thread: visual-inertial odometry
+// 最主要的线程
 void System::ProcessBackEnd()
 {
     cout << "1 ProcessBackEnd start" << endl;
