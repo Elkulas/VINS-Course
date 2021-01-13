@@ -156,6 +156,7 @@ void System::PubImageData(double dStampSec, Mat &img)
             else
             {
                 m_buf.lock();
+                // 存到system类下的变量featurebuf中
                 feature_buf.push(feature_points);
                 // cout << "5 PubImage t : " << fixed << feature_points->header
                 //     << " feature_buf size: " << feature_buf.size() << endl;
@@ -185,18 +186,28 @@ void System::PubImageData(double dStampSec, Mat &img)
     
 }
 
+// 获得测量信息
+// 对imu和图像数据进行对齐并组合，返回的是(IMUs, img_msg)s，即图像帧所对应的所有IMU数据，并将其放入一个容器vector中。
+// 对图像帧j，每次取完imu_buf中所有时间戳小于它的imu_msg，以及第一个时间戳大于图像帧时间戳的imu_msg （这里还需要加上同步时间存在的延迟td）
+// 在新代码中，每个大于图像帧时间戳的第一个imu_msg是被两个图像帧共用的，而产生的差别在processIMU()前进行了对应的处理。
+// img:    i -------- j  -  -------- k
+// imu:    - jjjjjjjj - j+k kkkkkkkk -
 vector<pair<vector<ImuConstPtr>, ImgConstPtr>> System::getMeasurements()
 {
     vector<pair<vector<ImuConstPtr>, ImgConstPtr>> measurements;
 
     while (true)
     {
+        // 如果都是空的,直接return
+        // 直到把缓存中的图像特征数据或者IMU数据取完，才能够跳出此函数
         if (imu_buf.empty() || feature_buf.empty())
         {
             cerr << "1 imu_buf.empty() || feature_buf.empty()" << endl;
             return measurements;
         }
 
+        // imu的时间大于图像的时间戳
+        // 对齐标准：IMU最后一个数据的时间要大于第一个图像特征数据的时间
         if (!(imu_buf.back()->header > feature_buf.front()->header + estimator.td))
         {
             cerr << "wait for imu, only should happen at the beginning sum_of_wait: " 
@@ -205,22 +216,29 @@ vector<pair<vector<ImuConstPtr>, ImgConstPtr>> System::getMeasurements()
             return measurements;
         }
 
+        //对齐标准：IMU第一个数据的时间要小于第一个图像特征数据的时间
         if (!(imu_buf.front()->header < feature_buf.front()->header + estimator.td))
         {
             cerr << "throw img, only should happen at the beginning" << endl;
             feature_buf.pop();
             continue;
         }
+        // 取出一个图像信息
         ImgConstPtr img_msg = feature_buf.front();
         feature_buf.pop();
-
+        // 取出imu信息
         vector<ImuConstPtr> IMUs;
+        // 图像数据对应多组imu数据,然后塞进measurements
         while (imu_buf.front()->header < img_msg->header + estimator.td)
         {
+            // 不用push_back,减少内存拷贝与移动
             IMUs.emplace_back(imu_buf.front());
             imu_buf.pop();
         }
-        // cout << "1 getMeasurements IMUs size: " << IMUs.size() << endl;
+        cout << "1 getMeasurements IMUs size: " << IMUs.size() << endl;
+
+        // 此处把下一个imumsg也放进去了,但没有pop
+        // 当前与下一帧都会使用这个数据
         IMUs.emplace_back(imu_buf.front());
         if (IMUs.empty()){
             cerr << "no imu between two image" << endl;
@@ -229,6 +247,8 @@ vector<pair<vector<ImuConstPtr>, ImgConstPtr>> System::getMeasurements()
         //     << " imu begin: "<< IMUs.front()->header 
         //     << " end: " << IMUs.back()->header
         //     << endl;
+        
+        // 相当于一帧之间的数据进行存入
         measurements.emplace_back(IMUs, img_msg);
     }
     return measurements;
@@ -273,6 +293,7 @@ void System::ProcessBackEnd()
         vector<pair<vector<ImuConstPtr>, ImgConstPtr>> measurements;
         
         unique_lock<mutex> lk(m_buf);
+        // 判断是否真正收到measurement
         con.wait(lk, [&] {
             return (measurements = getMeasurements()).size() != 0;
         });

@@ -118,6 +118,9 @@ private:
     std::ofstream ofs_pose;
     std::vector<Eigen::Vector3d> vPath_to_draw;
     bool bStart_backend;
+    // 原本属于estimator
+    // 该函数的主要功能是对imu和图像数据进行对齐并组合，返回的是(IMUs, img_msg)s，
+    // 即图像帧所对应的所有IMU数据，并将其放入一个容器vector中。
     std::vector<std::pair<std::vector<ImuConstPtr>, ImgConstPtr>> getMeasurements();
     
 };

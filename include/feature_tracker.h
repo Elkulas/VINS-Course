@@ -53,6 +53,8 @@ class FeatureTracker
     void showUndistortion(const string &name);
 
     // 通过F矩阵去除outliers
+    // 该函数主要是通过基本矩阵（F）去除外点outliers。首先将将图像坐标畸变矫正后转换为像素坐标，
+    // 通过cv::findFundamentalMat()计算F矩阵，利用得到的status通过reduceVector()去除outliers 。
     void rejectWithF();
 
     // 对特征点的图像坐标去畸变矫正，并计算每个角点的速度
