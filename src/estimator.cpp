@@ -410,14 +410,19 @@ bool Estimator::initialStructure()
 
     //solve pnp for all frame
     //对于所有的图像帧，包括不在滑动窗口中的，提供初始的RT估计
+    // 实际代码中所显示的,就是使用sfm优化得到的这些个三维点来求解剩下帧的位姿
+    // 前提是这些帧也有这些点的投影
     // 然后solvePnP进行优化,得到每一帧的姿态
     map<double, ImageFrame>::iterator frame_it;
     map<int, Vector3d>::iterator it;
     frame_it = all_image_frame.begin();
+    // 遍历所有帧
     for (int i = 0; frame_it != all_image_frame.end(); frame_it++)
     {
         // provide initial guess
         cv::Mat r, rvec, t, D, tmp_r;
+        // 查看该帧是否是滑动窗口内的关键帧(也就是那十个)
+        // 检查方式就是检查header时间戳
         if ((frame_it->first) == Headers[i])
         {
             frame_it->second.is_key_frame = true;
@@ -430,43 +435,58 @@ bool Estimator::initialStructure()
         {
             i++;
         }
+        // 这里说明该帧不是滑动窗口中的关键帧
+        // 给定一个初始值,初始值是最近的滑动窗口那一帧的数据
+        // 变换成第l帧到该帧的位姿
         Matrix3d R_inital = (Q[i].inverse()).toRotationMatrix();
         Vector3d P_inital = -R_inital * T[i];
         cv::eigen2cv(R_inital, tmp_r);
+        // 罗德里格斯公式将旋转矩阵转换成旋转向量
         cv::Rodrigues(tmp_r, rvec);
         cv::eigen2cv(P_inital, t);
 
         frame_it->second.is_key_frame = false;
         vector<cv::Point3f> pts_3_vector;
         vector<cv::Point2f> pts_2_vector;
+        // 遍历该帧的所有点
         for (auto &id_pts : frame_it->second.points)
         {
+            // 获取该特征点的特征id
             int feature_id = id_pts.first;
+            // 遍历观察到该点的所有cam
             for (auto &i_p : id_pts.second)
             {
+                // 找到该id在视觉sfm中的位置
                 it = sfm_tracked_points.find(feature_id);
+                // 这个点在sfm中出现过(不然等于.end)
                 if (it != sfm_tracked_points.end())
                 {
                     Vector3d world_pts = it->second;
+                    // 存储三维点
                     cv::Point3f pts_3(world_pts(0), world_pts(1), world_pts(2));
                     pts_3_vector.push_back(pts_3);
+                    // 存储二维点
                     Vector2d img_pts = i_p.second.head<2>();
                     cv::Point2f pts_2(img_pts(0), img_pts(1));
                     pts_2_vector.push_back(pts_2);
                 }
-            }
-        }
+            }// 遍历所有cam
+        }// 遍历所有点
+
+        // 保证至少这个帧里有五个特征点
         cv::Mat K = (cv::Mat_<double>(3, 3) << 1, 0, 0, 0, 1, 0, 0, 0, 1);
         if (pts_3_vector.size() < 6)
         {
             cout << "Not enough points for solve pnp pts_3_vector size " << pts_3_vector.size() << endl;
             return false;
         }
+        // 可以!解pnp
         if (!cv::solvePnP(pts_3_vector, pts_2_vector, K, D, rvec, t, 1))
         {
             cout << " solve pnp fail!" << endl;
             return false;
         }
+        // 这里也同样需要将坐标变换矩阵转变成图像帧位姿，并转换为IMU坐标系的位姿
         cv::Rodrigues(rvec, r);
         MatrixXd R_pnp, tmp_R_pnp;
         cv::cv2eigen(r, tmp_R_pnp);
@@ -476,7 +496,9 @@ bool Estimator::initialStructure()
         T_pnp = R_pnp * (-T_pnp);
         frame_it->second.R = R_pnp * RIC[0].transpose();
         frame_it->second.T = T_pnp;
-    }
+    }// 遍历所有帧
+
+    // 进行视觉imu联合初始化
     if (visualInitialAlign())
         return true;
     else
