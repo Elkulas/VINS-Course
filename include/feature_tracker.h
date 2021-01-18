@@ -75,6 +75,8 @@ class FeatureTracker
     // 对应帧中提取的特征点
     vector<cv::Point2f> prev_pts, cur_pts, forw_pts;
     // 归一化相机坐标系下的坐标
+    // xx_pts is with image coordinate, 
+    // while xx_un_pts is in ideal image plane after undistortion and normalization
     vector<cv::Point2f> prev_un_pts, cur_un_pts;
     // 当前帧相对前一帧特征点沿x,y方向的像素移动速度
     vector<cv::Point2f> pts_velocity;

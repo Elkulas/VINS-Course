@@ -18,6 +18,7 @@ public:
     {
         points = _points;
     };
+    // 某帧所有特征点的[camera_id,[x,y,z,u,v,vx,vy]]s构成的map,索引为feature_id
     map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> points;
     double t;
     Matrix3d R;

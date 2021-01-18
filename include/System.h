@@ -30,11 +30,15 @@ typedef std::shared_ptr<IMU_MSG const> ImuConstPtr;
 
 //image for vio    
 struct IMG_MSG {
+    // 时间戳
     double header;
     vector<Vector3d> points;
+    // 相机点的id,第n个相机中的第i个点就是 n*CAM_NUM+i
     vector<int> id_of_point;
+    // 特征点的uv位置
     vector<float> u_of_point;
     vector<float> v_of_point;
+    // 速度,在readimage中被修改,也就是减去上一帧除掉时间
     vector<float> velocity_x_of_point;
     vector<float> velocity_y_of_point;
 };

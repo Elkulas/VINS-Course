@@ -41,49 +41,85 @@ int FeatureManager::getFeatureCount()
     return cnt;
 }
 
-
+/**
+ * @brief   把特征点放入feature的list容器中，计算每一个点跟踪次数和它在次新帧和次次新帧间的视差，返回是否是关键帧
+ * @description 到底是删去最旧的帧（MARGIN_OLD）还是删去刚刚进来窗口倒数第二帧(MARGIN_SECOND_NEW)，
+ *              就需要对当前帧与之前帧进行视差比较，如果是当前帧变化很小，就会删去倒数第二帧，如果变化很大，就删去最旧的帧。
+ *              通过检测两帧之间的视差以及特征点数量决定 次新帧是否作为关键帧
+ *              输入的是特征点，但是会把能观测到这个特征点的所有帧也都放进去，
+ *              1、关键帧选取：
+                1、当前帧相对最近的关键帧的特征平均视差大于一个阈值就为关键帧
+                （因为视差可以根据平移和旋转共同得到，而纯旋转则导致不能三角化成功，所以这一步需要IMU预积分进行补偿）
+                2、当前帧跟踪到的特征点数量小于阈值视为关键帧；
+ *              第一个索引是特征点ID，第二个索引是观测到该特征点的相机帧 ID。
+ * @param[in]   frame_count 窗口内帧的个数
+ * @param[in]   image 某帧所有特征点的[camera_id,[x,y,z,u,v,vx,vy]]s构成的map,索引为feature_id
+ * @param[in]   td IMU和cam同步时间差
+ * @return  bool true：次新帧是关键帧;false：非关键帧
+*/
 bool FeatureManager::addFeatureCheckParallax(int frame_count, const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image, double td)
 {
     //ROS_DEBUG("input feature: %d", (int)image.size());
     //ROS_DEBUG("num of feature: %d", getFeatureCount());
+    // 所有特征点视差总和
     double parallax_sum = 0;
     int parallax_num = 0;
+    // 被跟踪的个数
     last_track_num = 0;
+
+    // 1. 把image map中的所有特征点放入feature list容器中
+    // 遍历特征点,看该特征点是否在特征点的列表中,如果没在,则将<FeatureID,Start_frame>存入到Feature列表中；否则统计数目
+    // 遍历所有特征点
     for (auto &id_pts : image)
     {
         FeaturePerFrame f_per_fra(id_pts.second[0].second, td);
 
+        // 1.1迭代器寻找feature list中是否有这feature_id
+        // 特征点id(该图像内的id)
         int feature_id = id_pts.first;
+        // lambda表达式
         auto it = find_if(feature.begin(), feature.end(), [feature_id](const FeaturePerId &it)
                           {
             return it.feature_id == feature_id;
                           });
 
+        // 1.2 如果没有则新建一个，并在feature管理器的list容器最后添加：FeaturePerId、FeaturePerFrame
         if (it == feature.end())
         {
+            // （特征点ID，首次观测到特征点的图像帧ID）
+            // frame_count直接设置成首次观察到该点的帧id,
             feature.push_back(FeaturePerId(feature_id, frame_count));
+            // 添加featureperframe
             feature.back().feature_per_frame.push_back(f_per_fra);
         }
+        // 1.3 feature里有的话在FeaturePerFrame添加此特征点在此帧的位置和其他信息，并统计数目。
         else if (it->feature_id == feature_id)
         {
             it->feature_per_frame.push_back(f_per_fra);
+            // 此帧有多少相同特征点被跟踪
+            // 如果有之前出现过的,就表明正在被追踪
             last_track_num++;
         }
-    }
+    } // 遍历所有特征点
 
+    // 2. 被追踪的特征点数目小于20或者窗口内帧的数目小于2，是关键帧
     if (frame_count < 2 || last_track_num < 20)
         return true;
 
+    // 3.计算每个特征在次新帧和次次新帧中的视差
     for (auto &it_per_id : feature)
     {
+        // 观测该特征点的：起始帧小于倒数第三帧，终止帧要大于倒数第二帧，保证至少有两帧能观测到。
         if (it_per_id.start_frame <= frame_count - 2 &&
             it_per_id.start_frame + int(it_per_id.feature_per_frame.size()) - 1 >= frame_count - 1)
         {
+            // 总视差：该特征点在两帧的归一化平面上的坐标点的距离ans
             parallax_sum += compensatedParallax2(it_per_id, frame_count);
             parallax_num++;
         }
     }
 
+    // 4.1 第一次加进去的，是关键帧
     if (parallax_num == 0)
     {
         return true;
@@ -92,6 +128,7 @@ bool FeatureManager::addFeatureCheckParallax(int frame_count, const map<int, vec
     {
         //ROS_DEBUG("parallax_sum: %lf, parallax_num: %d", parallax_sum, parallax_num);
         //ROS_DEBUG("current parallax: %lf", parallax_sum / parallax_num * FOCAL_LENGTH);
+        // 4.2 平均视差大于阈值的是关键帧
         return parallax_sum / parallax_num >= MIN_PARALLAX;
     }
 }

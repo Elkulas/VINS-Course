@@ -102,19 +102,34 @@ void Estimator::clearState()
     drift_correct_t = Vector3d::Zero();
 }
 
+/**
+ * @brief   处理IMU数据
+ * @Description IMU预积分，中值积分得到当前PQV作为优化初值
+ * @param[in]   dt 时间间隔
+ * @param[in]   linear_acceleration 线加速度
+ * @param[in]   angular_velocity 角速度
+ * @return  void
+*/
 void Estimator::processIMU(double dt, const Vector3d &linear_acceleration, const Vector3d &angular_velocity)
 {
+    // 判断是不是第一个imu消息，如果是第一个imu消息，则将当前传入的线加速度和角速度作为初始的加速度和角速度
+    // first_imu为false表示当前上报的imu数据为第一个imu数据
     if (!first_imu)
     {
+
         first_imu = true;
         acc_0 = linear_acceleration;
         gyr_0 = angular_velocity;
     }
 
+    // 初始化一个预计分的值
+    // 创建预积分对象
+    // IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)];
     if (!pre_integrations[frame_count])
     {
         pre_integrations[frame_count] = new IntegrationBase{acc_0, gyr_0, Bas[frame_count], Bgs[frame_count]};
     }
+    // 当滑动窗口内有图像帧数据时，进行预积分 frame_count表示滑动窗口中图像数据的个数
     if (frame_count != 0)
     {
         pre_integrations[frame_count]->push_back(dt, linear_acceleration, angular_velocity);
@@ -138,33 +153,60 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration, const
     gyr_0 = angular_velocity;
 }
 
+/**
+ * @brief   处理图像特征数据
+ * @Description addFeatureCheckParallax()添加特征点到feature中，计算点跟踪的次数和视差，判断是否是关键帧               
+ *              判断并进行外参标定
+ *              进行视觉惯性联合初始化或基于滑动窗口非线性优化的紧耦合VIO
+ * @param[in]   image 某帧所有特征点的[camera_id,[x,y,z,u,v,vx,vy]]s构成的map,索引为feature_id
+ * @param[in]   header 某帧图像的头信息
+ * @return  void
+*/
 void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image, double header)
 {
     //ROS_DEBUG("new image coming ------------------------------------------");
-    // cout << "Adding feature points: " << image.size()<<endl;
+    cout << "Adding feature points: " << image.size()<<endl;
+
+    // 添加之前检测到的特征点到feature容器中，计算每一个点跟踪的次数，以及它的视差
+    // 通过检测两帧之间的视差决定次新帧是否作为关键帧
+    // 判断是marg掉哪个量
+    // f_mamnager 滑动窗口内特征管理器类的对象
     if (f_manager.addFeatureCheckParallax(frame_count, image, td))
-        marginalization_flag = MARGIN_OLD;
+        marginalization_flag = MARGIN_OLD; // 0
     else
-        marginalization_flag = MARGIN_SECOND_NEW;
+        marginalization_flag = MARGIN_SECOND_NEW; //1
 
     //ROS_DEBUG("this frame is--------------------%s", marginalization_flag ? "reject" : "accept");
     //ROS_DEBUG("%s", marginalization_flag ? "Non-keyframe" : "Keyframe");
     //ROS_DEBUG("Solving %d", frame_count);
-    // cout << "number of feature: " << f_manager.getFeatureCount()<<endl;
+    cout << "number of feature: " << f_manager.getFeatureCount()<<endl;
+    
     Headers[frame_count] = header;
 
+    // 2. 填充imageframe的容器以及更新临时预积分初始值
+    // ImageFrame类包括特征点、时间、位姿Rt、预积分对象pre_integration、是否关键帧
     ImageFrame imageframe(image, header);
+    // tmp_pre_integration是之前IMU 预积分计算的
+    // 存到imageframe中
     imageframe.pre_integration = tmp_pre_integration;
+    // map<double, ImageFrame> all_image_frame;
+    // 存一下这个时间戳
     all_image_frame.insert(make_pair(header, imageframe));
+    // 更新零时预计分值
     tmp_pre_integration = new IntegrationBase{acc_0, gyr_0, Bas[frame_count], Bgs[frame_count]};
 
+    // 3. 如果没有外参则标定IMU到相机的外参
     if (ESTIMATE_EXTRINSIC == 2)
     {
         cout << "calibrating extrinsic param, rotation movement is needed" << endl;
         if (frame_count != 0)
         {
+            // 得到两帧之间归一化的特征点
             vector<pair<Vector3d, Vector3d>> corres = f_manager.getCorresponding(frame_count - 1, frame_count);
+            // 标定imu与camera之间的外参数
             Matrix3d calib_ric;
+            // 标定外参数
+            // 可以参见粉色笔记本中的笔记
             if (initial_ex_rotation.CalibrationExRotation(corres, pre_integrations[frame_count]->delta_q, calib_ric))
             {
                 // ROS_WARN("initial extrinsic rotation calib success");
@@ -177,53 +219,74 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
         }
     }
 
+    // 4. 初始化
     if (solver_flag == INITIAL)
     {
+        // frame_count是滑动窗口中图像帧的数量，一开始初始化为0，滑动窗口总帧数WINDOW_SIZE=10
+        // 确保有足够的frame参与初始化
         if (frame_count == WINDOW_SIZE)
         {
             bool result = false;
+            // 有外参且当前帧时间戳大于初始化时间戳0.1秒，就进行初始化操作
             if (ESTIMATE_EXTRINSIC != 2 && (header - initial_timestamp) > 0.1)
             {
                 // cout << "1 initialStructure" << endl;
+                // 4.1 重要！！！ 视觉惯性联合初始化
                 result = initialStructure();
+                // 4.2 更新初始化间隔
                 initial_timestamp = header;
             }
+            // 初始化成功
             if (result)
             {
+                // 先进行一次滑动窗口非线性优化，得到当前帧与第一帧的位姿
+                // 初始化更改为非线性
                 solver_flag = NON_LINEAR;
+                // 4.3 非线性化求解里程计
                 solveOdometry();
+                // 4.4 滑动窗口
                 slideWindow();
+                // 4.5 剔除feature中估计失败的点（solve_flag == 2）0 haven't solve yet; 1 solve succ; 2 solve fail;
                 f_manager.removeFailures();
                 cout << "Initialization finish!" << endl;
+                // 4.6 初始化窗口中PVQ
                 last_R = Rs[WINDOW_SIZE];
                 last_P = Ps[WINDOW_SIZE];
                 last_R0 = Rs[0];
                 last_P0 = Ps[0];
             }
             else
+                // 初始化失败直接滑动窗口
                 slideWindow();
         }
         else
             frame_count++;
     }
+    // 5. 紧耦合的非线性优化
     else
     {
         TicToc t_solve;
+        // 5.1 非线性化求解里程计
         solveOdometry();
         //ROS_DEBUG("solver costs: %fms", t_solve.toc());
 
+        // 5.2 故障检测与恢复,一旦检测到故障，系统将切换回初始化阶段
         if (failureDetection())
         {
             // ROS_WARN("failure detection!");
             failure_occur = 1;
+            // 清空状态
             clearState();
+            // 重新设置参数
             setParameter();
             // ROS_WARN("system reboot!");
             return;
         }
 
         TicToc t_margin;
+        // 5.3 滑动窗口
         slideWindow();
+        // 5.4 移除失败
         f_manager.removeFailures();
         //ROS_DEBUG("marginalization costs: %fms", t_margin.toc());
         // prepare output of VINS
@@ -237,12 +300,23 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
         last_P0 = Ps[0];
     }
 }
+
+// 视觉结构初始化过程至关重要，多传感器融合过程中，
+// 当单个传感器数据不确定性较高，需要依赖其他传感器降低不确定性。先对纯视觉SFM初始化相机位姿，再和IMU对齐。
+// 1、纯视觉SFM估计滑动窗内相机位姿和路标点逆深度
+// 2、视觉惯性联合校准，SFM与IMU积分对齐。
+// 使用松耦合的方式来进行初始化矫正,对应粉色笔记本上的内容
+
 bool Estimator::initialStructure()
 {
     TicToc t_sfm;
     //check imu observibility
+    // 1. 通过加速度标准差判断 IMU是否有充分运动以初始化
     {
+        // 信息帧的迭代器
         map<double, ImageFrame>::iterator frame_it;
+        // 统计帧内imu数据的加速度的和
+        // 1.1 求加速度均值aver_g
         Vector3d sum_g;
         for (frame_it = all_image_frame.begin(), frame_it++; frame_it != all_image_frame.end(); frame_it++)
         {
@@ -250,8 +324,10 @@ bool Estimator::initialStructure()
             Vector3d tmp_g = frame_it->second.pre_integration->delta_v / dt;
             sum_g += tmp_g;
         }
+        // 计算平均加速度值
         Vector3d aver_g;
         aver_g = sum_g * 1.0 / ((int)all_image_frame.size() - 1);
+        // 1.2 计算加速度的标准差,线加速度
         double var = 0;
         for (frame_it = all_image_frame.begin(), frame_it++; frame_it != all_image_frame.end(); frame_it++)
         {
@@ -262,50 +338,79 @@ bool Estimator::initialStructure()
         }
         var = sqrt(var / ((int)all_image_frame.size() - 1));
         //ROS_WARN("IMU variation %f!", var);
+        // 判断IMU的激励,如果不足0.25则表示imu没有充足激励
         if (var < 0.25)
         {
-            // ROS_INFO("IMU excitation not enouth!");
+            cerr << "IMU excitation not enouth!"<< endl;
             //return false;
         }
     }
     // global sfm
+    // 初始化变量
+    // 旋转四元数Q
     Quaterniond Q[frame_count + 1];
+    // 位姿变化T
     Vector3d T[frame_count + 1];
+    // 存储SFM重建出特征点的坐标
     map<int, Vector3d> sfm_tracked_points;
+    // SFMFeature三角化状态、特征点索引、平面观测、位置坐标、深度
     vector<SFMFeature> sfm_f;
+
+    // 2. 遍历滑窗中的所有角点
+    // 2. 将f_manager中的所有feature保存到存有SFMFeature对象的sfm_f中
+    // list<FeaturePerId> feature滑动窗口内所有角点
     for (auto &it_per_id : f_manager.feature)
     {
+        // 第一次观测到特征点的帧数-1
+        // 这里就是imu 的id
         int imu_j = it_per_id.start_frame - 1;
         SFMFeature tmp_feature;
         tmp_feature.state = false;
         tmp_feature.id = it_per_id.feature_id;
+
+        // 遍历能观测到该点的所有关键帧
+        // 也就是遍历这个特征点的所有观测信息
         for (auto &it_per_frame : it_per_id.feature_per_frame)
         {
             imu_j++;
+            // 遍历到点的信息
             Vector3d pts_j = it_per_frame.point;
+            // 保存该点的所有观测信息以及对应的imuid序列
             tmp_feature.observation.push_back(make_pair(imu_j, Eigen::Vector2d{pts_j.x(), pts_j.y()}));
         }
         sfm_f.push_back(tmp_feature);
-    }
+    } // 遍历所有角点结束
+
+    // 3. 返回滑动窗口中第一个满足视差的帧，为l帧，以及RT,可以三角化。
     Matrix3d relative_R;
     Vector3d relative_T;
     int l;
+    // 保证具有足够的视差,由E矩阵恢复R、t
+    // 这里的第L帧是从第一帧开始到滑动窗口中第一个满足与当前帧的平均视差足够大的帧，
+    // 会作为参考帧到下面的全局sfm使用，得到的Rt为当前帧到第l帧的坐标系变换Rt
     if (!relativePose(relative_R, relative_T, l))
     {
         cout << "Not enough features or parallax; Move device around" << endl;
         return false;
     }
+
+    //4. 对窗口中每个图像帧都求解sfm问题
+    // 得到滑动窗口内所有图像帧相对于参考帧l的姿态四元数Q 平移向量T 和特征点坐标sfm_tracked_points 
+    // Q、T存储的是每一帧相对于第l帧(参考帧)的相对位姿。
     GlobalSFM sfm;
     if (!sfm.construct(frame_count + 1, Q, T, l,
                        relative_R, relative_T,
                        sfm_f, sfm_tracked_points))
     {
+        // 求解失败则边缘化最早一帧并滑动窗口
         cout << "global SFM failed!" << endl;
         marginalization_flag = MARGIN_OLD;
         return false;
     }
 
     //solve pnp for all frame
+    //对于所有的图像帧，包括不在滑动窗口中的，提供初始的RT估计
+    // 然后solvePnP进行优化,得到每一帧的姿态
     map<double, ImageFrame>::iterator frame_it;
     map<int, Vector3d>::iterator it;
     frame_it = all_image_frame.begin();
@@ -459,25 +564,49 @@ bool Estimator::visualInitialAlign()
     return true;
 }
 
+
+/**
+ * @brief   返回滑动窗口中第一个满足视差的帧，为l帧，以及RT,可以三角化。
+ * @Description    判断每帧到窗口最后一帧(也就是当前帧)对应特征点的平均视差是否大于30
+                solveRelativeRT()通过基础矩阵计算当前帧与第l帧之间的R和T,并判断内点数目是否足够
+                找到滑动窗口中第一个与最后一帧具有足够的共视特征以及视差的帧的索引 l，
+                具体方式为在滑动窗内从第一帧开始计算每一帧和最后一帧匹配的特征点
+ * @param[out]   relative_R 当前帧到第l帧之间的旋转矩阵R
+ * @param[out]   relative_T 当前帧到第l帧之间的平移向量T
+ * @param[out]   L 从第一帧开始到滑动窗口中第一个满足视差足够的帧，这里的l帧之后作为参考帧做全局SFM用
+ * @return  bool 1:可以进行初始化;0:不满足初始化条件
+*/
 bool Estimator::relativePose(Matrix3d &relative_R, Vector3d &relative_T, int &l)
 {
     // find previous frame which contians enough correspondance and parallex with newest frame
+    // 遍历滑动窗口中的帧
+    // 寻找第i帧到窗口最后一帧(当前帧)的对应特征点
     for (int i = 0; i < WINDOW_SIZE; i++)
     {
         vector<pair<Vector3d, Vector3d>> corres;
+        // 先得到第i帧和最后一帧的特征匹配
+        // 找到corres满足的帧i
         corres = f_manager.getCorresponding(i, WINDOW_SIZE);
+        // 1. 如果corres数目足够
         if (corres.size() > 20)
         {
+            // 2. 计算平均视差
             double sum_parallax = 0;
             double average_parallax;
+
+            // 遍历所有匹配的特征点
             for (int j = 0; j < int(corres.size()); j++)
             {
+                // 第j个对应点在第i帧和最后一帧的(x,y)
                 Vector2d pts_0(corres[j].first(0), corres[j].first(1));
                 Vector2d pts_1(corres[j].second(0), corres[j].second(1));
                 double parallax = (pts_0 - pts_1).norm();
                 sum_parallax = sum_parallax + parallax;
-            }
+            }// 遍历所有匹配的特征点结束
             average_parallax = 1.0 * sum_parallax / int(corres.size());
+
+            // 判断是否满足初始化条件:视差>30并且内点inlier数目要满足要求
+            // 同时返回窗口最后一帧(当前帧)到第l帧(参考帧)的Rt
             if (average_parallax * 460 > 30 && m_estimator.solveRelativeRT(corres, relative_R, relative_T))
             {
                 l = i;

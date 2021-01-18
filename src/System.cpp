@@ -247,7 +247,7 @@ vector<pair<vector<ImuConstPtr>, ImgConstPtr>> System::getMeasurements()
         //     << " imu begin: "<< IMUs.front()->header 
         //     << " end: " << IMUs.back()->header
         //     << endl;
-        
+
         // 相当于一帧之间的数据进行存入
         measurements.emplace_back(IMUs, img_msg);
     }
@@ -297,6 +297,8 @@ void System::ProcessBackEnd()
         con.wait(lk, [&] {
             return (measurements = getMeasurements()).size() != 0;
         });
+
+        // measurements中包含了每一段序列的测量,其中一段序列就是包含一个图像数据以及两帧之间的imu数据
         if( measurements.size() > 1){
         cout << "1 getMeasurements size: " << measurements.size() 
             << " imu sizes: " << measurements[0].first.size()
@@ -305,18 +307,27 @@ void System::ProcessBackEnd()
         }
         lk.unlock();
         m_estimator.lock();
+        
+        // 处理测量的数据
+        // 最重要的部分
         for (auto &measurement : measurements)
         {
+            // 图像数据
             auto img_msg = measurement.second;
+            // d -> 加速度
+            // r -> 线速度
             double dx = 0, dy = 0, dz = 0, rx = 0, ry = 0, rz = 0;
+            // 遍历两图像帧之间的imu数据
             for (auto &imu_msg : measurement.first)
             {
                 double t = imu_msg->header;
                 double img_t = img_msg->header + estimator.td;
+                // 在图像帧之前的imu帧
                 if (t <= img_t)
                 {
                     if (current_time < 0)
                         current_time = t;
+                    // 解得dt
                     double dt = t - current_time;
                     assert(dt >= 0);
                     current_time = t;
@@ -354,12 +365,18 @@ void System::ProcessBackEnd()
             //     << " img_msg->points.size: "<< img_msg->points.size() << endl;
 
             // TicToc t_s;
+            // 某帧所有特征点的[camera_id,[x,y,z,u,v,vx,vy]]构成的map,索引为feature_id
             map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> image;
+            // 遍历特征点
             for (unsigned int i = 0; i < img_msg->points.size(); i++) 
             {
                 int v = img_msg->id_of_point[i] + 0.5;
+                // featureid 表示在该相机帧中的关键点组中的第几个
+                // id_of_point.push_back(p_id * NUM_OF_CAM + i);
                 int feature_id = v / NUM_OF_CAM;
+                // 相机自己的id
                 int camera_id = v % NUM_OF_CAM;
+                // 特征点的位置
                 double x = img_msg->points[i].x();
                 double y = img_msg->points[i].y();
                 double z = img_msg->points[i].z();
@@ -371,7 +388,8 @@ void System::ProcessBackEnd()
                 Eigen::Matrix<double, 7, 1> xyz_uv_velocity;
                 xyz_uv_velocity << x, y, z, p_u, p_v, velocity_x, velocity_y;
                 image[feature_id].emplace_back(camera_id, xyz_uv_velocity);
-            }
+            } // 遍历特征点
+
             TicToc t_processImage;
             estimator.processImage(image, img_msg->header);
             

@@ -22,26 +22,43 @@ class Estimator
   public:
     Estimator();
 
+    // 设置部分参数
     void setParameter();
 
     // interface
+    // 处理imu数据,预积分
     void processIMU(double t, const Vector3d &linear_acceleration, const Vector3d &angular_velocity);
     
+    // 处理图像特征数据
     void processImage(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image, double header);
     void setReloFrame(double _frame_stamp, int _frame_index, vector<Vector3d> &_match_points, Vector3d _relo_t, Matrix3d _relo_r);
 
     // internal
+    // 清空或初始化滑动窗口中所有的状态量
     void clearState();
+
+    // 视觉的结构初始化
     bool initialStructure();
+
+    // 视觉惯性联合初始化
     bool visualInitialAlign();
+
+    // 判断两帧有足够视差30且内点数目大于12则可进行初始化，同时得到R和T
     bool relativePose(Matrix3d &relative_R, Vector3d &relative_T, int &l);
+
+    // 滑动窗口法
     void slideWindow();
+
+    // VIO非线性优化求解里程计
     void solveOdometry();
     void slideWindowNew();
     void slideWindowOld();
+
+    // 基于滑动窗口的紧耦合的非线性优化，残差项的构造和求解
     void optimization();
     void backendOptimization();
 
+    // 和一家博士写得处理方式
     void problemSolve();
     void MargOldFrame();
     void MargNewFrame();
@@ -89,6 +106,7 @@ class Estimator
 
     Matrix3d back_R0, last_R, last_R0;
     Vector3d back_P0, last_P, last_P0;
+    // 滑动窗口内的所有帧的时间戳
     double Headers[(WINDOW_SIZE + 1)];
 
     IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)];
@@ -98,6 +116,8 @@ class Estimator
     vector<Vector3d> linear_acceleration_buf[(WINDOW_SIZE + 1)];
     vector<Vector3d> angular_velocity_buf[(WINDOW_SIZE + 1)];
 
+    // number of frames in the window.
+    // 窗口内帧的个数
     int frame_count;
     int sum_of_outlier, sum_of_back, sum_of_front, sum_of_invalid;
 
@@ -128,6 +148,7 @@ class Estimator
     // MarginalizationInfo *last_marginalization_info;
     vector<double *> last_marginalization_parameter_blocks;
 
+    // 时间戳,帧对象
     map<double, ImageFrame> all_image_frame;
     IntegrationBase *tmp_pre_integration;
 
