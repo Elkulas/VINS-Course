@@ -41,6 +41,12 @@ class Estimator
     bool initialStructure();
 
     // 视觉惯性联合初始化
+    // 流程
+    // VisualIMUAlignment（）函数计算陀螺仪偏置bg，尺度s，重力加速度g和速度v
+    // f_manager.triangulate（）计算特征点深度estimated_depth
+    // repropagate（）陀螺仪的偏置bgs改变，重新计算预积分
+    // 将Ps、Vs、depth进行更新
+    // 将重力旋转到Z轴，将Ps、Vs、Rs从相机参考坐标系c0旋转到世界坐标系w。
     bool visualInitialAlign();
 
     // 判断两帧有足够视差30且内点数目大于12则可进行初始化，同时得到R和T
@@ -148,7 +154,7 @@ class Estimator
     // MarginalizationInfo *last_marginalization_info;
     vector<double *> last_marginalization_parameter_blocks;
 
-    // 时间戳,帧对象
+    // 时间戳,帧对象,所有帧
     map<double, ImageFrame> all_image_frame;
     IntegrationBase *tmp_pre_integration;
 

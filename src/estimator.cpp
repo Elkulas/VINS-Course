@@ -510,6 +510,9 @@ bool Estimator::initialStructure()
         frame_it->second.R = R_pnp * RIC[0].transpose();
         frame_it->second.T = T_pnp;
     }// 遍历所有帧
+    
+    /// 至此,已经完成视觉上的相对位姿的初始化和解算,可以获得一个关于第l帧的一个相对位姿曲线
+    /// 接下来就是将视觉和imu数据进行联合对齐工作
 
     // 进行视觉imu联合初始化
     if (visualInitialAlign())
@@ -526,6 +529,7 @@ bool Estimator::visualInitialAlign()
     TicToc t_g;
     VectorXd x;
     //solve scale
+    // 1. 初始化速度,偏置bg,尺度s,重力加速度
     bool result = VisualIMUAlignment(all_image_frame, Bgs, g, x);
     if (!result)
     {
@@ -534,6 +538,7 @@ bool Estimator::visualInitialAlign()
     }
 
     // change state
+    // 2、得到所有图像帧的位姿Ps、Rs，并将其置为关键帧
     for (int i = 0; i <= frame_count; i++)
     {
         Matrix3d Ri = all_image_frame[Headers[i]].R;
@@ -543,6 +548,7 @@ bool Estimator::visualInitialAlign()
         all_image_frame[Headers[i]].is_key_frame = true;
     }
 
+    // 3、重新计算特征点的深度depth,因为已经有了scale
     VectorXd dep = f_manager.getDepthVector();
     for (int i = 0; i < dep.size(); i++)
         dep[i] = -1;
@@ -557,11 +563,16 @@ bool Estimator::visualInitialAlign()
     f_manager.triangulate(Ps, &(TIC_TMP[0]), &(RIC[0]));
 
     double s = (x.tail<1>())(0);
+
+    // 4、陀螺仪的偏置bgs改变，重新计算预积分
     for (int i = 0; i <= WINDOW_SIZE; i++)
     {
         pre_integrations[i]->repropagate(Vector3d::Zero(), Bgs[i]);
     }
+    // 5 将Ps,Vs,depth进行更新
+    // 5.1 目的是将姿态从相机坐标系c0转换到IMU坐标系中。
     for (int i = frame_count; i >= 0; i--)
+        // 之前相机第l帧为参考系，转换到IMU bo为基准坐标系
         Ps[i] = s * Ps[i] - Rs[i] * TIC[0] - (s * Ps[0] - Rs[0] * TIC[0]);
     int kv = -1;
     map<double, ImageFrame>::iterator frame_i;
@@ -570,9 +581,11 @@ bool Estimator::visualInitialAlign()
         if (frame_i->second.is_key_frame)
         {
             kv++;
+            // 5.2 Vs为优化得到的速度
             Vs[kv] = frame_i->second.R * x.segment<3>(kv * 3);
         }
     }
+    // 5.3 逆深度depth更新
     for (auto &it_per_id : f_manager.feature)
     {
         it_per_id.used_num = it_per_id.feature_per_frame.size();
@@ -581,12 +594,16 @@ bool Estimator::visualInitialAlign()
         it_per_id.estimated_depth *= s;
     }
 
+    // 6、所有变量从参考坐标系c0到世界坐标系。
+    // 通过将重力旋转到z轴上，得到世界坐标系与摄像机坐标系c0之间的旋转矩阵rot_diff
     Matrix3d R0 = Utility::g2R(g);
     double yaw = Utility::R2ypr(R0 * Rs[0]).x();
     R0 = Utility::ypr2R(Eigen::Vector3d{-yaw, 0, 0}) * R0;
     g = R0 * g;
     //Matrix3d rot_diff = R0 * Rs[0].transpose();
     Matrix3d rot_diff = R0;
+    
+    // 7/所有变量从参考坐标系c0旋转到世界坐标系w
     for (int i = 0; i <= frame_count; i++)
     {
         Ps[i] = rot_diff * Ps[i];
