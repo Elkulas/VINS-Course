@@ -6,10 +6,12 @@
 #include <ceres/ceres.h>
 using namespace Eigen;
 
+// 预积分构造类
 class IntegrationBase
 {
   public:
     IntegrationBase() = delete;
+    // 预积分类：加速度计、陀螺仪、线性加速度计ba、陀螺仪bg、雅克比矩阵初始化、协方差矩阵15*15、dt、PVQ
     IntegrationBase(const Eigen::Vector3d &_acc_0, const Eigen::Vector3d &_gyr_0,
                     const Eigen::Vector3d &_linearized_ba, const Eigen::Vector3d &_linearized_bg)
         : acc_0{_acc_0}, gyr_0{_gyr_0}, linearized_acc{_acc_0}, linearized_gyr{_gyr_0},
@@ -26,7 +28,7 @@ class IntegrationBase
         noise.block<3, 3>(12, 12) =  (ACC_W * ACC_W) * Eigen::Matrix3d::Identity();
         noise.block<3, 3>(15, 15) =  (GYR_W * GYR_W) * Eigen::Matrix3d::Identity();
     }
-
+    // pushback 添加新的测量
     void push_back(double dt, const Eigen::Vector3d &acc, const Eigen::Vector3d &gyr)
     {
         dt_buf.push_back(dt);
@@ -35,6 +37,7 @@ class IntegrationBase
         propagate(dt, acc, gyr);
     }
 
+    // 对新的bias重新计算预积分
     void repropagate(const Eigen::Vector3d &_linearized_ba, const Eigen::Vector3d &_linearized_bg)
     {
         sum_dt = 0.0;
@@ -51,6 +54,8 @@ class IntegrationBase
             propagate(dt_buf[i], acc_buf[i], gyr_buf[i]);
     }
 
+    // IMU预积分中采用中值积分递推Jacobian和Covariance
+    // 构造误差的线性化递推方程，得到Jacobian和Covariance递推公式-> Paper 式9、10、11
     void midPointIntegration(double _dt, 
                             const Eigen::Vector3d &_acc_0, const Eigen::Vector3d &_gyr_0,
                             const Eigen::Vector3d &_acc_1, const Eigen::Vector3d &_gyr_1,
@@ -60,7 +65,9 @@ class IntegrationBase
                             Eigen::Vector3d &result_linearized_ba, Eigen::Vector3d &result_linearized_bg, bool update_jacobian)
     {
         //ROS_INFO("midpoint integration");
+        // 中值积分
         Vector3d un_acc_0 = delta_q * (_acc_0 - linearized_ba);
+        // w
         Vector3d un_gyr = 0.5 * (_gyr_0 + _gyr_1) - linearized_bg;
         result_delta_q = delta_q * Quaterniond(1, un_gyr(0) * _dt / 2, un_gyr(1) * _dt / 2, un_gyr(2) * _dt / 2);
         Vector3d un_acc_1 = result_delta_q * (_acc_1 - linearized_ba);
@@ -70,13 +77,17 @@ class IntegrationBase
         result_linearized_ba = linearized_ba;
         result_linearized_bg = linearized_bg;         
 
+        // 计算传递方程中的F和V
+        // 然后更新雅克比矩阵和协方差矩阵
         if(update_jacobian)
         {
+            // w
             Vector3d w_x = 0.5 * (_gyr_0 + _gyr_1) - linearized_bg;
             Vector3d a_0_x = _acc_0 - linearized_ba;
             Vector3d a_1_x = _acc_1 - linearized_ba;
             Matrix3d R_w_x, R_a_0_x, R_a_1_x;
 
+            // 反对称
             R_w_x<<0, -w_x(2), w_x(1),
                 w_x(2), 0, -w_x(0),
                 -w_x(1), w_x(0), 0;
@@ -121,12 +132,20 @@ class IntegrationBase
 
             //step_jacobian = F;
             //step_V = V;
+            // 更新
+            // J_k+1 = F * J_k
             jacobian = F * jacobian;
+            // 下一时刻协方差 = F*当前预积分量协方差*FT + V*测量噪声的协方差*VT
             covariance = F * covariance * F.transpose() + V * noise * V.transpose();
         }
 
     }
 
+    // 预积分传播方程
+    // 使用中点积分方法midPointIntegration计算预积分的测量值
+    // 得到状态变化量以及更新协方差矩阵和jacobian矩阵
+    // 旋转delta_q 速度delta_v 位移delta_p 加速度的bias linearized_ba 陀螺仪的Bias linearized_bg
+    // 维护更新预积分的jacobian和covariance
     void propagate(double _dt, const Eigen::Vector3d &_acc_1, const Eigen::Vector3d &_gyr_1)
     {
         dt = _dt;
@@ -157,9 +176,11 @@ class IntegrationBase
      
     }
 
+    // 构建残差
     Eigen::Matrix<double, 15, 1> evaluate(const Eigen::Vector3d &Pi, const Eigen::Quaterniond &Qi, const Eigen::Vector3d &Vi, const Eigen::Vector3d &Bai, const Eigen::Vector3d &Bgi,
                                           const Eigen::Vector3d &Pj, const Eigen::Quaterniond &Qj, const Eigen::Vector3d &Vj, const Eigen::Vector3d &Baj, const Eigen::Vector3d &Bgj)
     {
+        // 残差
         Eigen::Matrix<double, 15, 1> residuals;
 
         Eigen::Matrix3d dp_dba = jacobian.block<3, 3>(O_P, O_BA);
@@ -172,11 +193,16 @@ class IntegrationBase
 
         Eigen::Vector3d dba = Bai - linearized_ba;
         Eigen::Vector3d dbg = Bgi - linearized_bg;
-
+        
+        // 使用传递后的噪声进行修正
+        // 也就是ba bg如何影响pvq的方式
+        // alpha_bibj = alpha_bibj + J_alpha_ba*dba + J_alpha_bg * dbg
+        // beta_bibj = beta_bibj + J_beta_ba*dba + J_beta_bg * dbg
         Eigen::Quaterniond corrected_delta_q = delta_q * Utility::deltaQ(dq_dbg * dbg);
         Eigen::Vector3d corrected_delta_v = delta_v + dv_dba * dba + dv_dbg * dbg;
         Eigen::Vector3d corrected_delta_p = delta_p + dp_dba * dba + dp_dbg * dbg;
 
+        // 残差计算公式
         residuals.block<3, 1>(O_P, 0) = Qi.inverse() * (0.5 * G * sum_dt * sum_dt + Pj - Pi - Vi * sum_dt) - corrected_delta_p;
         residuals.block<3, 1>(O_R, 0) = 2 * (corrected_delta_q.inverse() * (Qi.inverse() * Qj)).vec();
         residuals.block<3, 1>(O_V, 0) = Qi.inverse() * (G * sum_dt + Vj - Vi) - corrected_delta_v;
@@ -190,16 +216,21 @@ class IntegrationBase
     Eigen::Vector3d acc_1, gyr_1;
 
     const Eigen::Vector3d linearized_acc, linearized_gyr;
+    // TODO: 应该是使用误差纠正之后的ba bg数据
     Eigen::Vector3d linearized_ba, linearized_bg;
 
     Eigen::Matrix<double, 15, 15> jacobian, covariance;
     Eigen::Matrix<double, 15, 15> step_jacobian;
     Eigen::Matrix<double, 15, 18> step_V;
+    // 6x3
     Eigen::Matrix<double, 18, 18> noise;
 
     double sum_dt;
+    // pwbj-pwbi
     Eigen::Vector3d delta_p;
+    // qbibj
     Eigen::Quaterniond delta_q;
+    // vjw-viw
     Eigen::Vector3d delta_v;
 
     std::vector<double> dt_buf;

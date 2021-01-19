@@ -112,7 +112,7 @@ void Estimator::clearState()
 */
 void Estimator::processIMU(double dt, const Vector3d &linear_acceleration, const Vector3d &angular_velocity)
 {
-    // 判断是不是第一个imu消息，如果是第一个imu消息，则将当前传入的线加速度和角速度作为初始的加速度和角速度
+    // 1. 判断是不是第一个imu消息，如果是第一个imu消息，则将当前传入的线加速度和角速度作为初始的加速度和角速度
     // first_imu为false表示当前上报的imu数据为第一个imu数据
     if (!first_imu)
     {
@@ -122,33 +122,46 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration, const
         gyr_0 = angular_velocity;
     }
 
-    // 初始化一个预计分的值
+    // 2. 初始化一个预计分的值
     // 创建预积分对象
     // IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)];
     if (!pre_integrations[frame_count])
     {
         pre_integrations[frame_count] = new IntegrationBase{acc_0, gyr_0, Bas[frame_count], Bgs[frame_count]};
     }
+
     // 当滑动窗口内有图像帧数据时，进行预积分 frame_count表示滑动窗口中图像数据的个数
     if (frame_count != 0)
     {
+        // 3. 进行预积分操作
         pre_integrations[frame_count]->push_back(dt, linear_acceleration, angular_velocity);
         //if(solver_flag != NON_LINEAR)
         tmp_pre_integration->push_back(dt, linear_acceleration, angular_velocity);
 
+        // 4. 将dt,线速度,角速度加到buf中
         dt_buf[frame_count].push_back(dt);
         linear_acceleration_buf[frame_count].push_back(linear_acceleration);
         angular_velocity_buf[frame_count].push_back(angular_velocity);
 
         int j = frame_count;
+        // 5. 采用中值积分的方式
+        // 绿笔记中值法离散积分处
+        // a0=Q(a^-ba)-g 已知上一帧imu速度
         Vector3d un_acc_0 = Rs[j] * (acc_0 - Bas[j]) - g;
+        // w=0.5(w0+w1)-bg
         Vector3d un_gyr = 0.5 * (gyr_0 + angular_velocity) - Bgs[j];
+        // 旋转四元数更新
         Rs[j] *= Utility::deltaQ(un_gyr * dt).toRotationMatrix();
+        // a1 当前imu的速度
         Vector3d un_acc_1 = Rs[j] * (linear_acceleration - Bas[j]) - g;
+        // 中值积分下的加速度 0.5(a0+a1)
         Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);
+        // p_k+1 = p_k + v_k*dt + 0.5 * a * dt * dt
         Ps[j] += dt * Vs[j] + 0.5 * dt * dt * un_acc;
+        // vk+1 = vk + a*dt
         Vs[j] += dt * un_acc;
     }
+    // 6. 更新上一帧的加速度和角速度
     acc_0 = linear_acceleration;
     gyr_0 = angular_velocity;
 }
