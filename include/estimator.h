@@ -100,9 +100,13 @@ class Estimator
     VectorXd bp[2], backup_b;
 
     // TODO: RT对于imu和camera
+    // cam到body 的变换
+    // tbc, rbc
     Matrix3d ric[NUM_OF_CAM];
     Vector3d tic[NUM_OF_CAM];
 
+    // 经过初始化之后变成从imu系到world系的变换
+    // Pwb, Vwb, Rwb
     Vector3d Ps[(WINDOW_SIZE + 1)];
     Vector3d Vs[(WINDOW_SIZE + 1)];
     Matrix3d Rs[(WINDOW_SIZE + 1)];

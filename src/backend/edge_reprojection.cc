@@ -17,21 +17,26 @@ namespace backend {
 
 void EdgeReprojection::ComputeResidual() {
 //    std::cout << pts_i_.transpose() <<" "<<pts_j_.transpose()  <<std::endl;
-
+    // i 下的逆深度
     double inv_dep_i = verticies_[0]->Parameters()[0];
 
+    // i 的位姿
     VecX param_i = verticies_[1]->Parameters();
     Qd Qi(param_i[6], param_i[3], param_i[4], param_i[5]);
     Vec3 Pi = param_i.head<3>();
 
+    // j 的位姿
     VecX param_j = verticies_[2]->Parameters();
     Qd Qj(param_j[6], param_j[3], param_j[4], param_j[5]);
     Vec3 Pj = param_j.head<3>();
 
+    // 外参数
     VecX param_ext = verticies_[3]->Parameters();
     Qd qic(param_ext[6], param_ext[3], param_ext[4], param_ext[5]);
     Vec3 tic = param_ext.head<3>();
 
+    // 注意位姿都是imu到world
+    // 这里恢复到世界的点
     Vec3 pts_camera_i = pts_i_ / inv_dep_i;
     Vec3 pts_imu_i = qic * pts_camera_i + tic;
     Vec3 pts_w = Qi * pts_imu_i + Pi;

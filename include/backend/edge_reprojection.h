@@ -17,6 +17,11 @@ namespace backend {
  * 路标点的逆深度InveseDepth、第一次观测到该路标点的source Camera的位姿T_World_From_Body1，
  * 和观测到该路标点的mearsurement Camera位姿T_World_From_Body2。
  * 注意：verticies_顶点顺序必须为InveseDepth、T_World_From_Body1、T_World_From_Body2。
+ * NOTICE: 这里和之前course不同,这里是一个四元边,多了一个vertexpose,用来存放外参数
+ * 所以最后就变成了一个2,4维度的边,而不是2,3
+ * 之所以这么干是因为在原来代码中qic和tic是一个对象成员可以直接进行固定,但是在这里这个是通过外部计算得到的
+ * 所以需要多添加进这个节点作为信息的提供.
+ * 但是是不是不用这么做,因为在优化的过程中不用对vertexext也就是外参数做一个优化,毕竟之前也有计算过 TODO:
  */
 class EdgeReprojection : public Edge {
 public:

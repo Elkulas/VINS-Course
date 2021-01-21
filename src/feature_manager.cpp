@@ -238,35 +238,51 @@ VectorXd FeatureManager::getDepthVector()
 
 void FeatureManager::triangulate(Vector3d Ps[], Vector3d tic[], Matrix3d ric[])
 {
+    // 遍历所有feature
     for (auto &it_per_id : feature)
     {
+        // 该特征出现的次数等价于观察到该特征的帧数量
         it_per_id.used_num = it_per_id.feature_per_frame.size();
+        // 至少有两帧观测到了该特征点,同时不是最近的两帧
         if (!(it_per_id.used_num >= 2 && it_per_id.start_frame < WINDOW_SIZE - 2))
             continue;
-
+        // 如果已经估计出深度了,那么就不用继续估计
         if (it_per_id.estimated_depth > 0)
             continue;
+        
+        // 获得imu id
         int imu_i = it_per_id.start_frame, imu_j = imu_i - 1;
 
         assert(NUM_OF_CAM == 1);
+        // 构造三角化的那个A矩阵,每一个观测提供两个方程
         Eigen::MatrixXd svd_A(2 * it_per_id.feature_per_frame.size(), 4);
         int svd_idx = 0;
 
+        // 变换矩阵P0
         Eigen::Matrix<double, 3, 4> P0;
+        // 变换回相机坐标系
+        // t0 -> twc
+        // R0 -> Rwc
         Eigen::Vector3d t0 = Ps[imu_i] + Rs[imu_i] * tic[0];
         Eigen::Matrix3d R0 = Rs[imu_i] * ric[0];
         P0.leftCols<3>() = Eigen::Matrix3d::Identity();
         P0.rightCols<1>() = Eigen::Vector3d::Zero();
 
+        // 遍历每个帧
         for (auto &it_per_frame : it_per_id.feature_per_frame)
         {
             imu_j++;
-
+            // t0 -> twc
+            // R0 -> Rwc
             Eigen::Vector3d t1 = Ps[imu_j] + Rs[imu_j] * tic[0];
             Eigen::Matrix3d R1 = Rs[imu_j] * ric[0];
+            // 对齐到imu第一帧
+            // t -> t_c0ci
+            // R -> R_c0ci
             Eigen::Vector3d t = R0.transpose() * (t1 - t0);
             Eigen::Matrix3d R = R0.transpose() * R1;
             Eigen::Matrix<double, 3, 4> P;
+            // TODO: 为什么要transpose
             P.leftCols<3>() = R.transpose();
             P.rightCols<1>() = -R.transpose() * t;
             Eigen::Vector3d f = it_per_frame.point.normalized();
@@ -282,6 +298,7 @@ void FeatureManager::triangulate(Vector3d Ps[], Vector3d tic[], Matrix3d ric[])
         //it_per_id->estimated_depth = -b / A;
         //it_per_id->estimated_depth = svd_V[2] / svd_V[3];
 
+        // 获得深度
         it_per_id.estimated_depth = svd_method;
         //it_per_id->estimated_depth = INIT_DEPTH;
 

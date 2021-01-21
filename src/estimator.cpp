@@ -253,6 +253,7 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
             if (result)
             {
                 // 先进行一次滑动窗口非线性优化，得到当前帧与第一帧的位姿
+                // 也就是对目前初始化结束的部分做一次非线性优化,优化所有帧的位姿
                 // 初始化更改为非线性
                 solver_flag = NON_LINEAR;
                 // 4.3 非线性化求解里程计
@@ -602,7 +603,7 @@ bool Estimator::visualInitialAlign()
     g = R0 * g;
     //Matrix3d rot_diff = R0 * Rs[0].transpose();
     Matrix3d rot_diff = R0;
-    
+
     // 7/所有变量从参考坐标系c0旋转到世界坐标系w
     for (int i = 0; i <= frame_count; i++)
     {
@@ -677,16 +678,23 @@ void Estimator::solveOdometry()
     if (solver_flag == NON_LINEAR)
     {
         TicToc t_tri;
+        // 将所有的点进行三角化求解estimated depth
         f_manager.triangulate(Ps, tic, ric);
         //cout << "triangulation costs : " << t_tri.toc() << endl;        
         backendOptimization();
     }
 }
 
+// 从Ps、Rs、Vs、Bas、Bgs转化为para_Pose（6维，相机位姿）和para_SpeedBias（9维，相机速度、加速度偏置、角速度偏置）
+// 从tic和q转化为para_Ex_Pose （6维，Cam到IMU外参）
+// 从dep到para_Feature（1维，特征点深度）
+// 从td转化为para_Td（1维，标定同步时间）
 void Estimator::vector2double()
 {
+    // 对窗口内的帧进行变换
     for (int i = 0; i <= WINDOW_SIZE; i++)
     {
+        // 平移+旋转
         para_Pose[i][0] = Ps[i].x();
         para_Pose[i][1] = Ps[i].y();
         para_Pose[i][2] = Ps[i].z();
@@ -696,18 +704,23 @@ void Estimator::vector2double()
         para_Pose[i][5] = q.z();
         para_Pose[i][6] = q.w();
 
+        // 速度
         para_SpeedBias[i][0] = Vs[i].x();
         para_SpeedBias[i][1] = Vs[i].y();
         para_SpeedBias[i][2] = Vs[i].z();
 
+        // 加速度bias
         para_SpeedBias[i][3] = Bas[i].x();
         para_SpeedBias[i][4] = Bas[i].y();
         para_SpeedBias[i][5] = Bas[i].z();
-
+        
+        // 陀螺仪bias
         para_SpeedBias[i][6] = Bgs[i].x();
         para_SpeedBias[i][7] = Bgs[i].y();
         para_SpeedBias[i][8] = Bgs[i].z();
     }
+
+    // 从tic和q转化为para_Ex_Pose （6维，Cam到IMU外参）
     for (int i = 0; i < NUM_OF_CAM; i++)
     {
         para_Ex_Pose[i][0] = tic[i].x();
@@ -720,6 +733,8 @@ void Estimator::vector2double()
         para_Ex_Pose[i][6] = q.w();
     }
 
+    // 从dep到para_Feature（1维，特征点深度
+    // 这里获得的是逆深度 getvecdepth
     VectorXd dep = f_manager.getDepthVector();
     for (int i = 0; i < f_manager.getFeatureCount(); i++)
         para_Feature[i][0] = dep(i);
@@ -727,25 +742,42 @@ void Estimator::vector2double()
         para_Td[0][0] = td;
 }
 
+// 从Ps、Rs、Vs、Bas、Bgs转化为para_Pose（6维，相机位姿）和para_SpeedBias（9维，相机速度、加速度偏置、角速度偏置）
+// 从tic和q转化为para_Ex_Pose （6维，Cam到IMU外参）
+// 从dep到para_Feature（1维，特征点深度）
+// 从td转化为para_Td（1维，标定同步时间）
+
+// 后端优化之后的变量更新
+// 这是因为在后端滑动窗口的非线性优化时，我们并没有固定住第一帧的位姿不变，而是将其作为优化变量进行调整。
+// 但是，因为相机的偏航角yaw是不可观测的，也就是说对于任意的yaw都满足优化目标函数，因此优化之后我们将偏航角旋转至优化前的初始状态。
 void Estimator::double2vector()
 {
+    // 原来的最初始的Rs,Ps
+    // 获得yaw pitch row数据
     Vector3d origin_R0 = Utility::R2ypr(Rs[0]);
     Vector3d origin_P0 = Ps[0];
 
+    // 如果出现错误情况,那么就沿用上次没优化前的数据
     if (failure_occur)
     {
         origin_R0 = Utility::R2ypr(last_R0);
         origin_P0 = last_P0;
         failure_occur = 0;
     }
+    // 优化之后的第一帧旋转初始值
+    // 获得yaw pitch row数据
     Vector3d origin_R00 = Utility::R2ypr(Quaterniond(para_Pose[0][6],
                                                      para_Pose[0][3],
                                                      para_Pose[0][4],
                                                      para_Pose[0][5])
                                              .toRotationMatrix());
+    // 获得不客观的yaw偏差
     double y_diff = origin_R0.x() - origin_R00.x();
     //TODO
+    // yaw偏差计算得到的旋转矩阵
     Matrix3d rot_diff = Utility::ypr2R(Vector3d(y_diff, 0, 0));
+
+    // 如果yaw角变化比较小,那么直接使用原来的旋转和优化之后旋转的一个差值作为rotation diff
     if (abs(abs(origin_R0.y()) - 90) < 1.0 || abs(abs(origin_R00.y()) - 90) < 1.0)
     {
         //ROS_DEBUG("euler singular point!");
@@ -757,6 +789,8 @@ void Estimator::double2vector()
                                .transpose();
     }
 
+    // 对所有帧优化之后的位姿,motion参数放回RS PS vs bas bgs变量中
+    // 其中位姿和速度项同时乘以rot_diff来保证整条轨迹没有飘
     for (int i = 0; i <= WINDOW_SIZE; i++)
     {
 
@@ -779,7 +813,7 @@ void Estimator::double2vector()
                           para_SpeedBias[i][7],
                           para_SpeedBias[i][8]);
     }
-
+    // 优化完毕的外参数
     for (int i = 0; i < NUM_OF_CAM; i++)
     {
         tic[i] = Vector3d(para_Ex_Pose[i][0],
@@ -792,6 +826,7 @@ void Estimator::double2vector()
                      .toRotationMatrix();
     }
 
+    // 更新优化之后所有feature 的depth 参数
     VectorXd dep = f_manager.getDepthVector();
     for (int i = 0; i < f_manager.getFeatureCount(); i++)
         dep(i) = para_Feature[i][0];
@@ -800,6 +835,7 @@ void Estimator::double2vector()
         td = para_Td[0][0];
 
     // relative info between two loop frame
+    // 回环
     if (relocalization_info)
     {
         Matrix3d relo_r;
@@ -871,17 +907,20 @@ bool Estimator::failureDetection()
     return false;
 }
 
+// heyijia博士写的
 void Estimator::MargOldFrame()
 {
+    // 定义lossfunc
     backend::LossFunction *lossfunction;
     lossfunction = new backend::CauchyLoss(1.0);
 
-    // step1. 构建 problem
+    // step1. 构建 problem,边缘化problem
     backend::Problem problem(backend::Problem::ProblemType::SLAM_PROBLEM);
     vector<shared_ptr<backend::VertexPose>> vertexCams_vec;
     vector<shared_ptr<backend::VertexSpeedBias>> vertexVB_vec;
     int pose_dim = 0;
 
+    // 添加残差项,边缘化残差
     // 先把 外参数 节点加入图优化，这个节点在以后一直会被用到，所以我们把他放在第一个
     shared_ptr<backend::VertexPose> vertexExt(new backend::VertexPose());
     {
@@ -892,6 +931,7 @@ void Estimator::MargOldFrame()
         pose_dim += vertexExt->LocalDimension();
     }
 
+    // 位姿节点
     for (int i = 0; i < WINDOW_SIZE + 1; i++)
     {
         shared_ptr<backend::VertexPose> vertexCam(new backend::VertexPose());
@@ -913,7 +953,7 @@ void Estimator::MargOldFrame()
         pose_dim += vertexVB->LocalDimension();
     }
 
-    // IMU
+    // IMU 残差项
     {
         if (pre_integrations[1]->sum_dt < 10.0)
         {
@@ -999,9 +1039,11 @@ void Estimator::MargOldFrame()
         }
     }
 
+    // 定义要marg掉的顶点
     std::vector<std::shared_ptr<backend::Vertex>> marg_vertex;
     marg_vertex.push_back(vertexCams_vec[0]);
     marg_vertex.push_back(vertexVB_vec[0]);
+    // 在此处进行marg操作
     problem.Marginalize(marg_vertex, pose_dim);
     Hprior_ = problem.GetHessianPrior();
     bprior_ = problem.GetbPrior();
@@ -1080,8 +1122,13 @@ void Estimator::MargNewFrame()
     errprior_ = problem.GetErrPrior();
     Jprior_inv_ = problem.GetJtPrior();
 }
+
+
+// 相比于optimization,没有加入relocalization_info的优化与统计
+// prior就是对应了marginlizationfactor边缘化残差
 void Estimator::problemSolve()
 {
+    // 这个部分就像是之前的course_5的部分
     backend::LossFunction *lossfunction;
     lossfunction = new backend::CauchyLoss(1.0);
     //    lossfunction = new backend::TukeyLoss(1.0);
@@ -1093,6 +1140,7 @@ void Estimator::problemSolve()
     int pose_dim = 0;
 
     // 先把 外参数 节点加入图优化，这个节点在以后一直会被用到，所以我们把他放在第一个
+    // 外参
     shared_ptr<backend::VertexPose> vertexExt(new backend::VertexPose());
     {
         Eigen::VectorXd pose(7);
@@ -1112,6 +1160,8 @@ void Estimator::problemSolve()
         pose_dim += vertexExt->LocalDimension();
     }
 
+    // 遍历所有的pose,添加pose节点
+    // 添加所有速度项节点,也就是关于速度 bg ba的节点
     for (int i = 0; i < WINDOW_SIZE + 1; i++)
     {
         shared_ptr<backend::VertexPose> vertexCam(new backend::VertexPose());
@@ -1133,6 +1183,8 @@ void Estimator::problemSolve()
         pose_dim += vertexVB->LocalDimension();
     }
 
+    // 顶点添加全部结束
+    // 添加边开始
     // IMU
     for (int i = 0; i < WINDOW_SIZE; i++)
     {
@@ -1151,6 +1203,7 @@ void Estimator::problemSolve()
     }
 
     // Visual Factor
+    // 视觉项
     vector<shared_ptr<backend::VertexInverseDepth>> vertexPt_vec;
     {
         int feature_index = -1;
@@ -1166,6 +1219,7 @@ void Estimator::problemSolve()
             int imu_i = it_per_id.start_frame, imu_j = imu_i - 1;
             Vector3d pts_i = it_per_id.feature_per_frame[0].point;
 
+            // 添加逆深度节点
             shared_ptr<backend::VertexInverseDepth> verterxPoint(new backend::VertexInverseDepth());
             VecX inv_d(1);
             inv_d << para_Feature[feature_index][0];
@@ -1187,6 +1241,7 @@ void Estimator::problemSolve()
                 edge_vertex.push_back(verterxPoint);
                 edge_vertex.push_back(vertexCams_vec[imu_i]);
                 edge_vertex.push_back(vertexCams_vec[imu_j]);
+                // 注意这里多增加了外参数
                 edge_vertex.push_back(vertexExt);
 
                 edge->SetVertex(edge_vertex);
@@ -1215,6 +1270,7 @@ void Estimator::problemSolve()
         }
     }
 
+    // 优化求解迭代十次
     problem.Solve(10);
 
     // update bprior_,  Hprior_ do not need update
@@ -1230,14 +1286,17 @@ void Estimator::problemSolve()
     }
 
     // update parameter
+    // 更新优化完毕后的参数
     for (int i = 0; i < WINDOW_SIZE + 1; i++)
     {
+        // 更新pose
         VecX p = vertexCams_vec[i]->Parameters();
         for (int j = 0; j < 7; ++j)
         {
             para_Pose[i][j] = p[j];
         }
 
+        // 更新motion项
         VecX vb = vertexVB_vec[i]->Parameters();
         for (int j = 0; j < 9; ++j)
         {
@@ -1246,6 +1305,7 @@ void Estimator::problemSolve()
     }
 
     // 遍历每一个特征
+    // 更新逆深度
     for (int i = 0; i < vertexPt_vec.size(); ++i)
     {
         VecX f = vertexPt_vec[i]->Parameters();
@@ -1253,23 +1313,29 @@ void Estimator::problemSolve()
     }
 }
 
+// 这里就是对应vinsmono中原来的Estimator::optimization函数
 void Estimator::backendOptimization()
 {
     TicToc t_solver;
     // 借助 vins 框架，维护变量
     vector2double();
     // 构建求解器
+    // 这里就是进行修改的地方
     problemSolve();
     // 优化后的变量处理下自由度
     double2vector();
     //ROS_INFO("whole time for solver: %f", t_solver.toc());
 
     // 维护 marg
+    // 优化完毕之后开始marg
+    // 两步marg策略
     TicToc t_whole_marginalization;
     if (marginalization_flag == MARGIN_OLD)
     {
         vector2double();
-
+        // 边缘化最老帧
+        // 对应源代码中对于marginlization_info的操作
+        // 如果次新帧是关键帧，将边缘化最老帧，及其看到的路标点和IMU数据，将其转化为先验。
         MargOldFrame();
 
         std::unordered_map<long, double *> addr_shift; // prior 中对应的保留下来的参数地址
