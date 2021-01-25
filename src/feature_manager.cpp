@@ -327,19 +327,28 @@ void FeatureManager::removeOutlier()
     }
 }
 
+// 首次在原来最老帧出现的特征点转移到现在现在最老帧
+// 将特征进行转移,从要marg掉的帧转移到当前滑动窗口中最老帧中
+// 目前进行更新的部分就是这些特征点在当前滑动窗口最老帧中的深度信息进行更新操作
 void FeatureManager::removeBackShiftDepth(Eigen::Matrix3d marg_R, Eigen::Vector3d marg_P, Eigen::Matrix3d new_R, Eigen::Vector3d new_P)
 {
     for (auto it = feature.begin(), it_next = feature.begin();
          it != feature.end(); it = it_next)
     {
         it_next++;
-
+        
+        // 如果这个特征没有在第0帧也就是要被marg掉的老帧中观测到
+        // 那么这个特征对应的第一观测帧减一,因为marg掉了第一个帧
         if (it->start_frame != 0)
             it->start_frame--;
+        // 这个特征在要被marg掉的帧中找到
         else
         {
-            Eigen::Vector3d uv_i = it->feature_per_frame[0].point;  
+            // 获得这个特征点在marg帧上的投影
+            Eigen::Vector3d uv_i = it->feature_per_frame[0].point; 
+            // 将这个特征点观测帧集合中去掉marg帧 
             it->feature_per_frame.erase(it->feature_per_frame.begin());
+            // 如果少于两个帧观测到这个特征点,那么直接将这个特征点进行去除
             if (it->feature_per_frame.size() < 2)
             {
                 feature.erase(it);
@@ -347,9 +356,13 @@ void FeatureManager::removeBackShiftDepth(Eigen::Matrix3d marg_R, Eigen::Vector3
             }
             else
             {
+                // 获得在marg帧下该点的三维坐标点
                 Eigen::Vector3d pts_i = uv_i * it->estimated_depth;
+                // 该特征点的世界三维坐标点
                 Eigen::Vector3d w_pts_i = marg_R * pts_i + marg_P;
+                // 变换到新的最老帧下的三维坐标点
                 Eigen::Vector3d pts_j = new_R.transpose() * (w_pts_i - new_P);
+                // 获得新的最老帧下的深度信息
                 double dep_j = pts_j(2);
                 if (dep_j > 0)
                     it->estimated_depth = dep_j;

@@ -192,6 +192,7 @@ private:
     HashVertexIdToEdge vertexToEdge_;
 
     /// Ordering related
+    // 在ordering总进行变化的变量维度与数量统计
     ulong ordering_poses_ = 0;
     ulong ordering_landmarks_ = 0;
     ulong ordering_generic_ = 0;

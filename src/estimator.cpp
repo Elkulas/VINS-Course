@@ -1026,7 +1026,7 @@ void Estimator::MargOldFrame()
             problem.SetbPrior(bprior_);
             problem.SetErrPrior(errprior_);
             problem.SetJtPrior(Jprior_inv_);
-            problem.ExtendHessiansPriorSize(15); // 但是这个 prior 还是之前的维度，需要扩展下装新的pose
+            problem.ExtendHessiansPriorSize(15); // 但是这个 prior 还是之前的维度，需要扩展下装新的pose,多添加15
         }
         else
         {
@@ -1041,6 +1041,7 @@ void Estimator::MargOldFrame()
 
     // 定义要marg掉的顶点
     std::vector<std::shared_ptr<backend::Vertex>> marg_vertex;
+    // old 帧
     marg_vertex.push_back(vertexCams_vec[0]);
     marg_vertex.push_back(vertexVB_vec[0]);
     // 在此处进行marg操作
@@ -1338,9 +1339,15 @@ void Estimator::backendOptimization()
         // 如果次新帧是关键帧，将边缘化最老帧，及其看到的路标点和IMU数据，将其转化为先验。
         MargOldFrame();
 
+        // 调整参数块在下一次窗口中对应的位置（往前移一格），注意这里是指针，后面slideWindow中会赋新值，这里只是提前占座
+        // 这里仅仅是相当于将指针进行了一次移动，指针对应的数据还是旧数据，
+        // 因此需要结合后面调用的slideWindow()函数才能实现真正的滑窗移动
+        // TODO: 这里没理解
         std::unordered_map<long, double *> addr_shift; // prior 中对应的保留下来的参数地址
+        // 从1开始,因为0,也就是第一帧不要
         for (int i = 1; i <= WINDOW_SIZE; i++)
         {
+            //第i的位置存放的的是i-1的内容，这就意味着窗口向前移动了一格
             addr_shift[reinterpret_cast<long>(para_Pose[i])] = para_Pose[i - 1];
             addr_shift[reinterpret_cast<long>(para_SpeedBias[i])] = para_SpeedBias[i - 1];
         }
@@ -1353,6 +1360,7 @@ void Estimator::backendOptimization()
     }
     else
     {
+        // 如果存在先验
         if (Hprior_.rows() > 0)
         {
 
@@ -1360,6 +1368,8 @@ void Estimator::backendOptimization()
 
             MargNewFrame();
 
+            // 调整参数块在下一次窗口中对应的位置
+            // 去掉次新帧
             std::unordered_map<long, double *> addr_shift;
             for (int i = 0; i <= WINDOW_SIZE; i++)
             {
@@ -1387,19 +1397,23 @@ void Estimator::backendOptimization()
     
 }
 
-
+// 这个部分还是原来的部分
 void Estimator::slideWindow()
 {
     TicToc t_margin;
+    // 最老帧
     if (marginalization_flag == MARGIN_OLD)
     {
+        // 保存最老帧信息到back_变量中
         double t_0 = Headers[0];
         back_R0 = Rs[0];
         back_P0 = Ps[0];
         if (frame_count == WINDOW_SIZE)
         {
+            // 遍历窗口内帧
             for (int i = 0; i < WINDOW_SIZE; i++)
             {
+                // swap操作,将最老帧也就是0代表的帧一致swap到第Rs[WINDOW_SIZE]处
                 Rs[i].swap(Rs[i + 1]);
 
                 std::swap(pre_integrations[i], pre_integrations[i + 1]);
@@ -1413,7 +1427,8 @@ void Estimator::slideWindow()
                 Vs[i].swap(Vs[i + 1]);
                 Bas[i].swap(Bas[i + 1]);
                 Bgs[i].swap(Bgs[i + 1]);
-            }
+            }// 遍历窗口内帧
+
             Headers[WINDOW_SIZE] = Headers[WINDOW_SIZE - 1];
             Ps[WINDOW_SIZE] = Ps[WINDOW_SIZE - 1];
             Vs[WINDOW_SIZE] = Vs[WINDOW_SIZE - 1];
@@ -1448,12 +1463,14 @@ void Estimator::slideWindow()
             slideWindowOld();
         }
     }
+    // MARGIN_SECOND_NEW 边缘化次新帧，但是不删除IMU约束
     else
     {
         if (frame_count == WINDOW_SIZE)
         {
             for (unsigned int i = 0; i < dt_buf[frame_count].size(); i++)
             {
+                // 取出最新一帧的信息
                 double tmp_dt = dt_buf[frame_count][i];
                 Vector3d tmp_linear_acceleration = linear_acceleration_buf[frame_count][i];
                 Vector3d tmp_angular_velocity = angular_velocity_buf[frame_count][i];
@@ -1493,19 +1510,26 @@ void Estimator::slideWindowNew()
 // real marginalization is removed in solve_ceres()
 void Estimator::slideWindowOld()
 {
+    // 1、统计一共多少次marg滑窗第一帧情况
     sum_of_back++;
 
     bool shift_depth = solver_flag == NON_LINEAR ? true : false;
     if (shift_depth)
     {
+        // R0P0 -> 要marg掉的帧的位姿 Rwc, Rwc
+        // R1P1 -> 当前滑动窗口中最老的帧的位姿 Rwc, Rwc
         Matrix3d R0, R1;
         Vector3d P0, P1;
+        //back_R0、back_P0为窗口中最老帧的位姿
+        //Rs[0]、Ps[0]为滑动窗口后第0帧的位姿，即原来的第1帧
         R0 = back_R0 * ric[0];
         R1 = Rs[0] * ric[0];
         P0 = back_P0 + back_R0 * tic[0];
         P1 = Ps[0] + Rs[0] * tic[0];
+        // 首次在原来最老帧出现的特征点转移到现在现在最老帧
         f_manager.removeBackShiftDepth(R0, P0, R1, P1);
     }
     else
+    // TODO: 没有搞懂这个逻辑
         f_manager.removeBack();
 }

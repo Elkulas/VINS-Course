@@ -10,7 +10,7 @@ namespace backend {
 /**
  * SpeedBias vertex
  * parameters: v, ba, bg 9 DoF
- * 
+ * 也就是之前的motion
  */
 class VertexSpeedBias : public Vertex {
 public:
