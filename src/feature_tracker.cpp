@@ -187,6 +187,7 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
             
             // 继续检测需要增加数目的角点
             // 这里就是角点检测函数部分
+            // 包括最开始角点的检测也是这里
 
             /** 
             * cv::goodFeaturesToTrack()
@@ -203,7 +204,7 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
             * @param[in]    harrisK： Harris角点检测需要的k值
             * @return      void
             */
-            cv::goodFeaturesToTrack(forw_img, n_pts, MAX_CNT - forw_pts.size(), 0.01, MIN_DIST, mask);
+            cv::goodFeaturesToTrack(forw_img, n_pts, MAX_CNT - forw_pts.size(), 0.01, MIN_DIST, mask, 3, true, 0.04);
         }
         else
             n_pts.clear();
